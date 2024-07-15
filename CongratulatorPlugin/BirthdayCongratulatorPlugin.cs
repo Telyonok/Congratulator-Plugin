@@ -4,12 +4,19 @@ using Microsoft.Xrm.Sdk.Query;
 using System;
 using System.Linq;
 using System.ServiceModel;
+using System.Xml;
 
 namespace CongratulatorPlugin
 {
     public class BirthdayCongratulatorPlugin : IPlugin
     {
-        public const string EmailSubject = "Happy Birthday";
+        private const string EmailSubject = "Happy Birthday";
+        private readonly string emailTemplateXML = string.Empty;
+        public BirthdayCongratulatorPlugin(string unSecureConfig, string secureConfig)
+        {
+            emailTemplateXML = unSecureConfig;
+        }
+
         public void Execute(IServiceProvider serviceProvider)
         {
             IPluginExecutionContext context = (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
@@ -34,19 +41,21 @@ namespace CongratulatorPlugin
 
         private void InitiateCongratulationActivity(IPluginExecutionContext context, IOrganizationService organizationService, ITracingService tracingService)
         {
-            if (context.MessageName != "Create" ||  // Check for event type, plugin should only work for "Create" actions.
+            if (context.MessageName != "Create" ||  // Check for event type, plugin should only work for "Create" messages.
                 !context.InputParameters.Contains("Target") ||
                 !(context.InputParameters["Target"] is Entity))
                 return;
 
             Entity entity = (Entity)context.InputParameters["Target"];
 
-            if (entity.LogicalName != "contact")    // Return if target entity is not Contact.
+            if (entity.LogicalName != "contact" ||   // Return if the entity is not Contact or has no birthdate or email specified.
+                !entity.Attributes.Contains("birthdate") ||
+                !entity.Attributes.Contains("emailaddress1"))   
                 return;
 
             DateTime birthdayDate = (DateTime)entity.Attributes["birthdate"];
 
-            if (birthdayDate.Day != DateTime.Now.Day || birthdayDate.Month != DateTime.Now.Month)
+            if (birthdayDate.Day != DateTime.Now.Day || birthdayDate.Month != DateTime.Now.Month) // Return if today is not Contact's birthday.
                 return;
 
             tracingService.Trace("Started congratulatory email send activity."); // Log the start of operation.
@@ -67,7 +76,7 @@ namespace CongratulatorPlugin
             string fetchXml = $@"
             <fetch version=""1.0"" output-format=""xml-platform"" mapping=""logical"" distinct=""false"">
                 <entity name=""email"">
-                    <all-attributes />
+                    <attribute name=""subject""/>
                     <order attribute=""subject"" descending=""false""/>
                     <filter type=""and"">
                         <condition attribute=""createdon"" operator=""this-year""/>
@@ -85,6 +94,8 @@ namespace CongratulatorPlugin
 
         private SendEmailResponse SendCongratulatoryEmail(Entity entity, Guid senderGuid, IOrganizationService organizationService, ITracingService tracingService)
         {
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(emailTemplateXML);
             Entity email = new Entity("email");
 
             Entity fromParty = new Entity("activityparty");
@@ -96,7 +107,7 @@ namespace CongratulatorPlugin
             email["from"] = new Entity[] { fromParty };
             email["to"] = new Entity[] { toParty };
             email["subject"] = EmailSubject;
-            email["description"] = "Hi, " + entity.Attributes["fullname"] + ",\n\tToday is your birthday, congratulations! We wish you well.";
+            email["description"] = string.Format(doc.SelectSingleNode("//body").InnerText, entity.Attributes["fullname"]); // Take template from plugin config.
             email["directioncode"] = true;
             email["regardingobjectid"] = new EntityReference("contact", entity.Id);
 
