@@ -1,21 +1,18 @@
-﻿using Microsoft.Crm.Sdk.Messages;
-using Microsoft.Xrm.Sdk;
+﻿using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
+using Newtonsoft.Json;
 using System;
-using System.Linq;
+using System.Net.Http;
 using System.ServiceModel;
-using System.Xml;
+using System.Text;
 
 namespace CongratulatorPlugin
 {
     public class BirthdayCongratulatorPlugin : IPlugin
     {
-        private const string EmailSubject = "Happy Birthday";
-        private readonly string emailTemplateXML = string.Empty;
-        public BirthdayCongratulatorPlugin(string unSecureConfig, string secureConfig)
-        {
-            emailTemplateXML = unSecureConfig;
-        }
+        private const string EmailSubject = "Birthday Congratulation";
+        private const string DelayedEmailSendApiUrl = "https://prod2-28.germanywestcentral.logic.azure.com:443/workflows/aaf3fd3124f14cae92deae92697bd8da/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=cc1ywoDm2OtKUyqDEEFEaKXcQ6AsnRfpjqyTAHurefM";
+        private const string ContentType = "application/json";
 
         public void Execute(IServiceProvider serviceProvider)
         {
@@ -41,7 +38,7 @@ namespace CongratulatorPlugin
 
         private void InitiateCongratulationActivity(IPluginExecutionContext context, IOrganizationService organizationService, ITracingService tracingService)
         {
-            if (context.MessageName != "Create" ||  // Check for event type, plugin should only work for "Create" messages.
+            if ((context.MessageName != "Create" && context.MessageName != "Update") ||  // Check for event type, plugin should only work for "Create" and "Update" messages.
                 !context.InputParameters.Contains("Target") ||
                 !(context.InputParameters["Target"] is Entity))
                 return;
@@ -55,9 +52,6 @@ namespace CongratulatorPlugin
 
             DateTime birthdayDate = (DateTime)entity.Attributes["birthdate"];
 
-            if (birthdayDate.Day != DateTime.Now.Day || birthdayDate.Month != DateTime.Now.Month) // Return if today is not Contact's birthday.
-                return;
-
             tracingService.Trace("Started congratulatory email send activity."); // Log the start of operation.
 
             if (HasCongratulatoryEmailBeenSentThisYear(entity.Attributes["emailaddress1"].ToString(), organizationService, tracingService))
@@ -66,9 +60,44 @@ namespace CongratulatorPlugin
                 return;
             }
 
-            SendEmailResponse response = SendCongratulatoryEmail(entity, context.UserId, organizationService, tracingService);
-            tracingService.Trace("Email response: " + response.Results.Values.First().ToString());
+            if (birthdayDate.Day == DateTime.Now.Day &&
+                birthdayDate.Month == DateTime.Now.Month)
+            {
+                tracingService.Trace("Birthday is today!");  // Log the end of operation.
+                ScheduleCongratulatoryEmail(organizationService, DateTime.Now.AddMinutes(5), entity.Id, context.UserId);   // If birthday  is today - schedule it 5 minutes from now.
+            }
+            else
+                ScheduleCongratulatoryEmail(organizationService, new DateTime(DateTime.Now.Year, birthdayDate.Month, birthdayDate.Day), entity.Id, context.UserId);
+
             tracingService.Trace("Ended congratulatory email send activity.");  // Log the end of operation.
+        }
+
+        private void ScheduleCongratulatoryEmail(IOrganizationService organizationService, DateTime birthdayDate, Guid receiverGuid, Guid senderGuid)
+        {
+            // Construct the JSON payload.
+            var jsonPayload = new
+            {
+                scheduleDate = birthdayDate.ToString("yyyy-MM-ddTHH:mm:00Z"),
+                title = EmailSubject,
+                receiverGuid = receiverGuid.ToString(),
+                senderGuid = senderGuid.ToString()
+            };
+
+            // Make the POST request to PA flow.
+            var httpClient = new HttpClient();
+            var requestUri = DelayedEmailSendApiUrl;
+            var content = new StringContent(JsonConvert.SerializeObject(jsonPayload), Encoding.UTF8, ContentType);
+
+            try
+            {
+                var response = httpClient.PostAsync(requestUri, content).Result;
+                response.EnsureSuccessStatusCode();
+            }
+            catch (Exception ex)
+            {
+                // Log the exception
+                throw new InvalidPluginExecutionException($"Failed to schedule congratulatory email: {ex.Message}", ex);
+            }
         }
 
         private bool HasCongratulatoryEmailBeenSentThisYear(string contactEmail, IOrganizationService organizationService, ITracingService tracingService)
@@ -90,36 +119,6 @@ namespace CongratulatorPlugin
             bool emailSentThisYear = emails.Count > 0; // If there is already one sent - no need to send another one.
 
             return emailSentThisYear;
-        }
-
-        private SendEmailResponse SendCongratulatoryEmail(Entity entity, Guid senderGuid, IOrganizationService organizationService, ITracingService tracingService)
-        {
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(emailTemplateXML);
-            Entity email = new Entity("email");
-
-            Entity fromParty = new Entity("activityparty");
-            Entity toParty = new Entity("activityparty");
-
-            fromParty["partyid"] = new EntityReference("systemuser", senderGuid);
-            toParty["partyid"] = new EntityReference("contact", entity.Id);
-
-            email["from"] = new Entity[] { fromParty };
-            email["to"] = new Entity[] { toParty };
-            email["subject"] = EmailSubject;
-            email["description"] = string.Format(doc.SelectSingleNode("//body").InnerText, entity.Attributes["fullname"]); // Take template from plugin config.
-            email["directioncode"] = true;
-            email["regardingobjectid"] = new EntityReference("contact", entity.Id);
-
-            Guid emailId = organizationService.Create(email);
-            SendEmailRequest emailRequest = new SendEmailRequest
-            {
-                EmailId = emailId,
-                TrackingToken = "",
-                IssueSend = true
-            };
-
-            return (SendEmailResponse)organizationService.Execute(emailRequest);
         }
     }
 }
