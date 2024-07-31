@@ -4,6 +4,7 @@ using Microsoft.Xrm.Sdk.Query;
 using Microsoft.Xrm.Sdk.Workflow;
 using System;
 using System.Activities;
+using System.Linq;
 using System.ServiceModel;
 
 namespace CongratulatoryEmailWorkflow
@@ -42,6 +43,7 @@ namespace CongratulatoryEmailWorkflow
                 Entity receiver = null;
                 string receiverFirstname = null;
                 string receiverLastname = null;
+                int receiverGenderCode = 0;
                 DateTime receiverBirthdate = DateTime.MinValue;
 
                 // Check for missing fields.
@@ -70,7 +72,7 @@ namespace CongratulatoryEmailWorkflow
                     emailTemplateName = EmailTemplateName.Get(executionContext);
 
                 // Retrieve receiver data.
-                receiver = organizationService.Retrieve("contact", new Guid(receiverGuid), new ColumnSet("firstname", "lastname", "birthdate"));
+                receiver = organizationService.Retrieve("contact", new Guid(receiverGuid), new ColumnSet("firstname", "lastname", "birthdate", "gendercode"));
 
                 // Check for missing receiver data.
                 if (receiver == null)
@@ -82,9 +84,15 @@ namespace CongratulatoryEmailWorkflow
                 receiverFirstname = receiver.GetAttributeValue<string>("firstname");
                 receiverLastname = receiver.GetAttributeValue<string>("lastname");
                 receiverBirthdate = receiver.GetAttributeValue<DateTime>("birthdate");
+                OptionSetValue genderCodeOptionSet = receiver.GetAttributeValue<OptionSetValue>("gendercode");
+
+                if (genderCodeOptionSet != null)
+                     receiverGenderCode = genderCodeOptionSet.Value;
+
+                tracingService.Trace($"GenderCode = {receiverGenderCode}.");
 
                 // Send congratulatory email
-                SendCongratulatoryEmail(emailTemplateName, receiverGuid, receiverFirstname, receiverLastname, receiverBirthdate, senderGuid, organizationService, tracingService);
+                SendCongratulatoryEmail(emailTemplateName, receiverGuid, receiverFirstname, receiverLastname, receiverBirthdate, receiverGenderCode, senderGuid, organizationService, tracingService);
 
                 tracingService.Trace("Ended scheduled email send activity.");
             }
@@ -99,15 +107,28 @@ namespace CongratulatoryEmailWorkflow
             }
         }
 
-        private SendEmailResponse SendCongratulatoryEmail(string emailTemplateName, string receiverGuid, string receiverFirstname, string receiverLastname, DateTime receiverBirthdate, string senderGuid, IOrganizationService organizationService, ITracingService tracingService)
+        private SendEmailResponse SendCongratulatoryEmail(string emailTemplateName, string receiverGuid, string receiverFirstname, string receiverLastname, DateTime receiverBirthdate, int genderCode, string senderGuid, IOrganizationService organizationService, ITracingService tracingService)
         {
             tracingService.Trace("Getting email template.");
-            Entity emailTemplate = GetEmailTemplateByName(organizationService, emailTemplateName);
+            string emailTemplate = EmailConstants.EmailTemplates[emailTemplateName];
             tracingService.Trace("Finished getting email template.");
 
+            string gendercodeTitle = string.Empty;
+
+            switch (genderCode)
+            {
+                case 1: // Male.
+                    gendercodeTitle = "Sehr geehrter Herr";
+                    break;
+                case 2: // Female.
+                    gendercodeTitle = "Sehr geehrte Frau";
+                    break;
+            }
+
             // Replace the placeholders in the email body
-            string body = emailTemplate.Attributes["body"].ToString().Replace("[Firstname]", receiverFirstname)
+            string body = emailTemplate.Replace("[Firstname]", receiverFirstname)
                                                    .Replace("[Lastname]", receiverLastname)
+                                                   .Replace("[GendercodeTitle]", gendercodeTitle)
                                                    .Replace("[Birthdate]", receiverBirthdate.ToString("d"));
 
             Entity email = new Entity("email");
@@ -136,17 +157,19 @@ namespace CongratulatoryEmailWorkflow
             return (SendEmailResponse)organizationService.Execute(emailRequest);
         }
 
-        private static Entity GetEmailTemplateByName(IOrganizationService service, string templateName)
-        {
-            QueryExpression query = new QueryExpression("template");
-            query.ColumnSet.AddColumn("body");
-            query.Criteria.AddCondition("title", ConditionOperator.Equal, templateName);
+        // Deprecated.
+        /*        private static Entity GetEmailTemplateByName(IOrganizationService service, string templateName)
+                {
+                    QueryExpression query = new QueryExpression("template");
+                    query.ColumnSet.AddColumn("body");
+                    query.Criteria.AddCondition("title", ConditionOperator.Equal, templateName);
 
-            EntityCollection result = service.RetrieveMultiple(query);
-            if (result.Entities.Count > 0)
-                return result.Entities[0];
-            else
-                throw new Exception($"Email template '{templateName}' not found.");
-        }
+                    EntityCollection result = service.RetrieveMultiple(query);
+                    if (result.Entities.Count > 0)
+                        return result.Entities[0];
+                    else
+                        throw new Exception($"Email template '{templateName}' not found.");
+                }
+        */
     }
 }

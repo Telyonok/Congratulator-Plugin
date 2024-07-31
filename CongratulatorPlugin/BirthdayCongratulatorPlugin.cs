@@ -21,6 +21,9 @@ namespace CongratulatorPlugin
             IOrganizationService organizationService = factory.CreateOrganizationService(context.InitiatingUserId);
             ITracingService tracingService = (ITracingService)serviceProvider.GetService(typeof(ITracingService));
 
+            if (context.Depth > 1)  // If the plugin was called by other plugin - we ignore that call.
+                return;
+
             try
             {
                 InitiateCongratulationActivity(context, organizationService, tracingService);
@@ -64,7 +67,7 @@ namespace CongratulatorPlugin
                 birthdayDate.Month == DateTime.Now.Month)
             {
                 tracingService.Trace("Birthday is today!");  // Log the end of operation.
-                ScheduleCongratulatoryEmail(organizationService, DateTime.Now.AddMinutes(5), entity.Id, context.UserId);   // If birthday  is today - schedule it 5 minutes from now.
+                ScheduleCongratulatoryEmail(organizationService, DateTime.Now.AddMinutes(2), entity.Id, context.UserId);   // If birthday  is today - schedule it 2 minutes from now.
             }
             else
                 ScheduleCongratulatoryEmail(organizationService, new DateTime(DateTime.Now.Year, birthdayDate.Month, birthdayDate.Day), entity.Id, context.UserId);

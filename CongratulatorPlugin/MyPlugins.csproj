@@ -102,8 +102,10 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AutoGenderDefinerPlugin.cs" />
     <Compile Include="BirthdayCongratulatorPlugin.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="QNCWebService.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
